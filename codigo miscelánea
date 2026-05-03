@@ -1,3 +1,5 @@
+#codigo para generar tabla, mostrando para cada combinación: total, generados (con VCF), fallidos (sin VCF), y el progreso del burden test al lado.
+
 import os
 import csv
 
