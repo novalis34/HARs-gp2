@@ -1,0 +1,115 @@
+import os
+import csv
+
+# ---- Configuración ----
+DIR_WSPS    = "/home/jupyter/workspace/ws_files"
+DIR_NOVA    = f"{DIR_WSPS}/Novalis"
+DIR_BURDEN  = f"{DIR_NOVA}/Burden"
+DIR_ORIG    = f"{DIR_WSPS}/Original_Files"
+HAR_LIST    = f"{DIR_ORIG}/HAR_list_phase_1.tsv"
+
+ANCESTRIES = ['AAC', 'AFR', 'AJ', 'AMR', 'CAS', 'EAS', 'EUR', 'FIN', 'MDE', 'SAS', 'CAH']
+DATASETS   = ['NBA', 'WGS']
+BURDEN_CLASSES = ["maf01", "maf03"]
+
+# ---- Cargar lista maestra de HARs ----
+with open(HAR_LIST) as f:
+    HARS_ALL = [row[3] for row in csv.reader(f, delimiter='\t')]
+TOTAL_HARS = len(HARS_ALL)
+print(f"Total HARs en master list: {TOTAL_HARS}")
+print(f"Clases de burden:          {BURDEN_CLASSES}\n")
+
+# ---- Header ----
+header = (f"{'DS':<4} {'ANC':<5} "
+          f"{'TOTAL':>6} {'EXTR':>6} {'FAIL':>6} {'EXTR%':>6}  ||  "
+          f"{'B.EXP':>6} {'B.DONE':>7} {'B.%':>6} {'FALTAN':>7}  {'STATUS':<14}")
+print(header)
+print("-" * len(header))
+
+totales = {'extr': 0, 'fail': 0, 'expected': 0, 'done': 0, 'faltan': 0,
+           'extr_total': 0}
+
+for ds in DATASETS:
+    for anc in ANCESTRIES:
+        # === Paso 1: regionExtractor (anotation of the gene) ===
+        indiv_dir = f"{DIR_WSPS}/Working_{ds}/{anc}/InputFiles/Indiv_HARS"
+        try:
+            files = set(os.listdir(indiv_dir))
+            extr = sum(1 for h in HARS_ALL
+                       if f"{h}.vcf.gz" in files and f"{h}.vcf.gz.tbi" in files)
+            extr_ran = True
+        except FileNotFoundError:
+            extr = 0
+            extr_ran = False
+
+        # FAIL = HARs sin VCF generado (sea porque regionExtractor falló o no corrió)
+        if extr_ran:
+            fail = TOTAL_HARS - extr
+        else:
+            fail = 0   # no corrió, no consideramos como "failed"
+        extr_pct = (extr / TOTAL_HARS * 100) if TOTAL_HARS else 0
+
+        # === Paso 2: burden test (rvtest) ===
+        expected   = extr * len(BURDEN_CLASSES)
+        burden_dir = f"{DIR_BURDEN}/{ds}/{anc}"
+        if os.path.isdir(burden_dir):
+            done = sum(1 for f in os.listdir(burden_dir)
+                       if f.endswith(".Skat.assoc")
+                       and os.path.getsize(os.path.join(burden_dir, f)) > 0)
+        else:
+            done = 0
+
+        falta = max(0, expected - done)
+        burden_pct = (done / expected * 100) if expected else 0.0
+
+        # === Status ===
+        if not extr_ran:
+            status = "extr no corrió"
+        elif extr == 0:
+            status = "extr todo falló"
+        elif done == 0:
+            status = "burden pend."
+        elif done < expected:
+            status = "burden en curso"
+        else:
+            status = "COMPLETO"
+
+        print(f"{ds:<4} {anc:<5} "
+              f"{TOTAL_HARS:>6} {extr:>6} {fail:>6} {extr_pct:>5.1f}%  ||  "
+              f"{expected:>6} {done:>7} {burden_pct:>5.1f}% {falta:>7}  {status:<14}")
+
+        totales['extr']       += extr
+        totales['fail']       += fail
+        totales['expected']   += expected
+        totales['done']       += done
+        totales['faltan']     += falta
+        totales['extr_total'] += TOTAL_HARS if extr_ran else 0
+
+print("-" * len(header))
+total_pct = (totales['extr'] / totales['extr_total'] * 100) if totales['extr_total'] else 0
+burden_pct_t = (totales['done'] / totales['expected'] * 100) if totales['expected'] else 0
+print(f"{'TOTAL':<10} "
+      f"{totales['extr_total']:>6} {totales['extr']:>6} {totales['fail']:>6} {total_pct:>5.1f}%  ||  "
+      f"{totales['expected']:>6} {totales['done']:>7} {burden_pct_t:>5.1f}% {totales['faltan']:>7}")
+
+print("\n" + "="*80)
+print("LEYENDA")
+print("="*80)
+print("PASO 1 - regionExtractor (annotation of the gene):")
+print(f"  TOTAL    : HARs en master list ({TOTAL_HARS}, fijo)")
+print(f"  EXTR     : HARs con VCF generado en .../Working_<DS>/<ANC>/InputFiles/Indiv_HARS/")
+print(f"  FAIL     : HARs sin VCF (TOTAL - EXTR), incluye los listados en failed_HARs_*.tsv")
+print(f"  EXTR%    : EXTR / TOTAL")
+print(f"")
+print("PASO 2 - burden test (rvtest):")
+print(f"  B.EXP    : burden tests esperados (EXTR × N° clases = EXTR × {len(BURDEN_CLASSES)})")
+print(f"  B.DONE   : .Skat.assoc generados (no vacíos) en .../Novalis/Burden/<DS>/<ANC>/")
+print(f"  B.%      : B.DONE / B.EXP")
+print(f"  FALTAN   : B.EXP - B.DONE (lo que queda por correr)")
+print(f"")
+print("STATUS posibles:")
+print(f"  extr no corrió  : no existe la carpeta Indiv_HARS, regionExtractor no se ejecutó")
+print(f"  extr todo falló : la carpeta existe pero no hay VCFs (todos los HARs fallaron)")
+print(f"  burden pend.    : VCFs disponibles pero burden test no iniciado")
+print(f"  burden en curso : .Skat.assoc parciales")
+print(f"  COMPLETO        : todos los burden tests hechos")
